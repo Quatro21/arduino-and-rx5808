@@ -1,0 +1,164 @@
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#include <EEPROM.h> // Для збереження останньої частоти
+
+// Ініціалізація OLED-дисплея
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+#define OLED_RESET -1
+#define SCREEN_ADDRESS 0x3C
+
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+
+// Визначення кнопок
+#define BUTTON_MODE 3
+#define BUTTON_SELECT 2
+#define BUTTON_SAVE 4
+
+// Визначення пінів
+#define LED_PIN 13
+#define BUZZER_PIN 6
+#define RSSI_PIN A0
+
+// Частоти
+int frequencies[] = {5645, 5665, 5685, 5705, 5725, 5745, 5765, 5785, 5805, 5825, 5845};
+int currentFrequencyIndex = 0;
+int currentMode = 1;
+unsigned long lastScanTime = 0;
+unsigned long scanInterval = 500; // Зменшено затримку
+int signalStrength = 0;
+unsigned long buttonPressTime = 0;
+bool buzzerActive = false;
+unsigned long buzzerStartTime = 0;
+bool droneDetected = false;
+int menuIndex = 0;
+bool menuActive = false;
+
+void setup() {
+    Serial.begin(115200);
+    pinMode(BUTTON_MODE, INPUT_PULLUP);
+    pinMode(BUTTON_SELECT, INPUT_PULLUP);
+    pinMode(BUTTON_SAVE, INPUT_PULLUP);
+    pinMode(LED_PIN, OUTPUT);
+    pinMode(BUZZER_PIN, OUTPUT);
+
+    // Ініціалізація дисплея
+    if (!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
+        for (;;);
+    }
+    
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setTextColor(WHITE);
+    display.setCursor(0, 0);
+    display.print("Starting system...");
+    display.display();
+    delay(1000);
+
+    // Завантаження останньої частоти
+    currentFrequencyIndex = EEPROM.read(0);
+    if (currentFrequencyIndex >= 11) currentFrequencyIndex = 0;
+    display.clearDisplay();
+}
+
+void loop() {
+    handleButtons();
+    if (!menuActive) {
+        switch (currentMode) {
+            case 1: autoScan(); break;
+            case 2: displaySignalStrength(); break;
+            case 3: saveLastFrequency(); break;
+            case 4: displayAnimation(); break;
+        }
+    } else {
+        displayMenu();
+    }
+    delay(50);
+}
+
+// --- Меню ---
+void displayMenu() {
+    display.clearDisplay();
+    display.setCursor(0, 0);
+    display.print("MENU");
+    display.setCursor(0, 20);
+    switch (menuIndex) {
+        case 0: display.print("1. AutoScan"); break;
+        case 1: display.print("2. Signal Strength"); break;
+        case 2: display.print("3. Save Frequency"); break;
+        case 3: display.print("4. Start FPV"); break;
+    }
+    display.display();
+}
+
+// --- Автоматичне сканування ---
+void autoScan() {
+    unsigned long currentMillis = millis();
+    if (currentMillis - lastScanTime >= scanInterval && !droneDetected) {
+        currentFrequencyIndex = (currentFrequencyIndex + 1) % 11;
+        setFrequency(currentFrequencyIndex);
+        displayFrequency();
+        signalStrength = analogRead(RSSI_PIN);
+        lastScanTime = currentMillis;
+        if (signalStrength > 500) {
+            digitalWrite(LED_PIN, HIGH);
+            if (!buzzerActive) {
+                tone(BUZZER_PIN, 1000);
+                buzzerStartTime = millis();
+                buzzerActive = true;
+            }
+            droneDetected = true;
+        } else {
+            digitalWrite(LED_PIN, LOW);
+        }
+    }
+    if (buzzerActive && millis() - buzzerStartTime > 10000) {
+        noTone(BUZZER_PIN);
+        buzzerActive = false;
+        droneDetected = false;
+    }
+}
+
+// --- Обробка кнопок ---
+void handleButtons() {
+    if (digitalRead(BUTTON_MODE) == LOW) {
+        delay(50);
+        menuActive = true;
+        menuIndex = (menuIndex + 1) % 4;
+        displayMenu();
+        while (digitalRead(BUTTON_MODE) == LOW);
+    }
+    if (digitalRead(BUTTON_SELECT) == LOW) {
+        delay(50);
+        currentMode = menuIndex + 1;
+        menuActive = false;
+        while (digitalRead(BUTTON_SELECT) == LOW);
+    }
+    if (digitalRead(BUTTON_SAVE) == LOW) {
+        delay(50);
+        saveLastFrequency();
+        while (digitalRead(BUTTON_SAVE) == LOW);
+    }
+}
+
+// --- Оповіщення FPV ---
+void startFPV() {
+    display.clearDisplay();
+    display.setCursor(0, 0);
+    display.print("FPV MODE ACTIVE");
+    display.setCursor(0, 20);
+    display.print("Connect External Screen");
+    display.display();
+}
+
+// --- Встановлення частоти ---
+void setFrequency(int index) {
+    int freq = frequencies[index];
+    Serial.print("Switching to: ");
+    Serial.print(freq);
+    Serial.println(" MHz");
+    digitalWrite(LED_PIN, HIGH);
+    delay(100);
+    digitalWrite(LED_PIN, LOW);
+}
